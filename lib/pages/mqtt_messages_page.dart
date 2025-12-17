@@ -81,23 +81,23 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
         children: [
           Padding(
             padding: const EdgeInsets.all(8.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _subTopicCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Subscribe topic',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _subscribe,
-                  child: const Text('Subscribe'),
-                ),
-              ],
-            ),
+            // child: Row(
+            //   children: [
+            //     Expanded(
+            //       child: TextField(
+            //         controller: _subTopicCtrl,
+            //         decoration: const InputDecoration(
+            //           labelText: 'Subscribe topic',
+            //         ),
+            //       ),
+            //     ),
+            //     const SizedBox(width: 8),
+            //     ElevatedButton(
+            //       onPressed: _subscribe,
+            //       child: const Text('Subscribe'),
+            //     ),
+            //   ],
+            // ),
           ),
           Expanded(
             child: _messages.isEmpty
@@ -108,8 +108,25 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
                     itemBuilder: (context, index) {
                       final m = _messages[index];
                       return ListTile(
-                        title: Text(m.topic),
-                        subtitle: Text(m.payload),
+                        title: Text(m.topic, style: TextStyle(fontSize: 12)),
+                        subtitle: Container(
+                          padding: const EdgeInsets.symmetric(
+                            vertical: 10,
+                            horizontal: 15,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color.fromARGB(255, 74, 49, 176),
+                            borderRadius: BorderRadius.circular(15),
+                          ),
+                          child: Text(
+                            m.payload,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
                         trailing: Text(
                           '${m.time.hour}:${m.time.minute.toString().padLeft(2, '0')}',
                         ),
