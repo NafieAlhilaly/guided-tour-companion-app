@@ -1,6 +1,4 @@
-# flutter_application_1
-
-A new Flutter project.
+A client app for [guided-tour-companion-drone](https://github.com/NafieAlhilaly/guided-tour-companion-drone)
 
 ## Getting Started
 
