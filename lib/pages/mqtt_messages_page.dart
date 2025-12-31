@@ -47,16 +47,22 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
   }
 
   void _publish() {
-    final topic = _pubTopicCtrl.text.trim();
-    final payload = _pubMsgCtrl.text;
+    final topic = "/notification/med_alert";
+    final payload = "med_alert";
     if (topic.isEmpty) return;
     MqttService.instance.publish(topic, payload);
     _pubMsgCtrl.clear();
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Published to $topic')));
+    _showTopSnackBar('Published to $topic');
   }
-
+  void _showTopSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.only(top: 16, left: 16, right: 16),
+      ),
+    );
+  }
   void _disconnect() {
     MqttService.instance.disconnect();
     Navigator.of(context).popUntil((route) => route.isFirst);
@@ -103,7 +109,7 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
             child: _messages.isEmpty
                 ? const Center(child: Text('No messages yet'))
                 : ListView.builder(
-                    reverse: false,
+                    reverse: true,
                     itemCount: _messages.length,
                     itemBuilder: (context, index) {
                       final m = _messages[index];
@@ -137,38 +143,13 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.all(8.0),
-            child: Column(
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _pubTopicCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Publish topic',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                  ],
+            child: ElevatedButton(
+                style: ButtonStyle(
+                backgroundColor: WidgetStateProperty.all(Colors.red),
+                foregroundColor: WidgetStateProperty.all(Colors.white),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _pubMsgCtrl,
-                        decoration: const InputDecoration(labelText: 'Message'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: _publish,
-                      child: const Text('Send'),
-                    ),
-                  ],
-                ),
-              ],
+              onPressed: _publish,
+              child: const Text('Send Medical Alert'),
             ),
           ),
         ],
