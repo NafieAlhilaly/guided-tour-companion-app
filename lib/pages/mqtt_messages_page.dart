@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import '../services/mqtt_service.dart';
+import 'video_stream_page.dart';
 
 class MqttMessagesPage extends StatefulWidget {
   const MqttMessagesPage({super.key});
@@ -143,13 +144,38 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.all(8.0),
-            child: ElevatedButton(
-                style: ButtonStyle(
-                backgroundColor: WidgetStateProperty.all(Colors.red),
-                foregroundColor: WidgetStateProperty.all(Colors.white),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    style: ButtonStyle(
+                      backgroundColor: WidgetStateProperty.all(Colors.red),
+                      foregroundColor: WidgetStateProperty.all(Colors.white),
+                    ),
+                    onPressed: _publish,
+                    child: const Text('Send Medical Alert'),
+                  ),
                 ),
-              onPressed: _publish,
-              child: const Text('Send Medical Alert'),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ButtonStyle(
+                      backgroundColor: WidgetStateProperty.all(Colors.blue),
+                      foregroundColor: WidgetStateProperty.all(Colors.white),
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const VideoStreamPage(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.videocam),
+                    label: const Text('Video Stream'),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
