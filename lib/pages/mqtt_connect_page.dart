@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../services/mqtt_service.dart';
 import 'mqtt_messages_page.dart';
+import 'mock_messages_page.dart';
+import 'mock_video_stream_page.dart';
 
 class MqttConnectPage extends StatefulWidget {
   const MqttConnectPage({super.key});
@@ -81,6 +83,49 @@ class _MqttConnectPageState extends State<MqttConnectPage> {
                     onPressed: _connect,
                     child: const Text('Connect'),
                   ),
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 16),
+            Text(
+              'Mock Mode (No MQTT Connection)',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const MockMessagesPage(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.message),
+              label: const Text('Mock Messages'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const MockVideoStreamPage(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.videocam),
+              label: const Text('Mock Video Stream'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
           ],
         ),
       ),
