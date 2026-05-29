@@ -1,8 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import '../services/mqtt_service.dart';
-import 'video_stream_page.dart';
+import 'video_feed_page.dart';
 
 class MqttMessagesPage extends StatefulWidget {
   const MqttMessagesPage({super.key});
@@ -73,6 +74,7 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
   Widget build(BuildContext context) {
     MqttService.instance.subscribe("/notification/med_alert");
     MqttService.instance.subscribe("/notification/violation_alert");
+    MqttService.instance.subscribe("/notification/alert_notification");
     return Scaffold(
       appBar: AppBar(
         title: const Text('MQTT Messages'),
@@ -125,14 +127,7 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
                             color: const Color.fromARGB(255, 74, 49, 176),
                             borderRadius: BorderRadius.circular(15),
                           ),
-                          child: Text(
-                            m.payload,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 16,
-                            ),
-                          ),
+                          child: _buildMessageContent(m),
                         ),
                         trailing: Text(
                           '${m.time.hour}:${m.time.minute.toString().padLeft(2, '0')}',
@@ -167,7 +162,7 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (context) => const VideoStreamPage(),
+                          builder: (context) => const VideoFeedPage(),
                         ),
                       );
                     },
@@ -179,6 +174,50 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildMessageContent(ReceivedMqttMessage m) {
+    if (m.topic == '/notification/alert_notification') {
+      try {
+        final Map<String, dynamic> data = jsonDecode(m.payload);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (data['message'] != null)
+              Text(
+                data['message'],
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+            if (data['image'] != null) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.memory(
+                  base64Decode(data['image']),
+                  fit: BoxFit.contain,
+                  errorBuilder: (context, error, stackTrace) => const Text(
+                    'Error loading image',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        );
+      } catch (_) {}
+    }
+    return Text(
+      m.payload,
+      style: const TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.w600,
+        fontSize: 16,
       ),
     );
   }
