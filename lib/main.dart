@@ -100,14 +100,6 @@ class _MyHomePageState extends State<MyHomePage> {
           children: [
             ElevatedButton(
               onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const VideoFeedPage()),
-              ),
-              style: ElevatedButton.styleFrom(minimumSize: const Size(200, 50)),
-              child: const Text('Video Stream'),
-            ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const MqttConnectPage()),
               ),
               style: ElevatedButton.styleFrom(minimumSize: const Size(200, 50)),

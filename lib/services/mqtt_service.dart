@@ -22,6 +22,9 @@ class MqttService {
   MqttServerClient? _client;
   final StreamController<ReceivedMqttMessage> _messagesController =
       StreamController.broadcast();
+  
+  String? _host;
+  String get host => _host ?? 'localhost';
 
   Stream<ReceivedMqttMessage> get messages => _messagesController.stream;
 
@@ -33,6 +36,7 @@ class MqttService {
     int port = 1883,
     String? clientIdentifier,
   }) async {
+    _host = host;
     _client = MqttServerClient(
       host,
       clientIdentifier ??

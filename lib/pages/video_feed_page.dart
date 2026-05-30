@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import '../services/mqtt_service.dart';
 
 class VideoFeedPage extends StatefulWidget {
   const VideoFeedPage({super.key});
@@ -11,18 +13,18 @@ class VideoFeedPage extends StatefulWidget {
   State<VideoFeedPage> createState() => _VideoFeedPageState();
 }
 
-class _VideoFeedPageState extends State<VideoFeedPage> {
-  final TextEditingController _hostController = TextEditingController(text: 'localhost');
-  final TextEditingController _portController = TextEditingController(text: '8080');
-  
-  RTCPeerConnection? _peerConnection;
+class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserver {
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
+  RTCPeerConnection? _peerConnection;
   bool _isStreaming = false;
+  bool _shouldBeStreaming = false; // Track if the user explicitly started the stream
+  bool _isFullScreen = false;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initRenderer();
   }
 
@@ -31,17 +33,63 @@ class _VideoFeedPageState extends State<VideoFeedPage> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Handle reconnection when the app comes back from screen timeout/background
+    if (state == AppLifecycleState.resumed) {
+      if (_shouldBeStreaming && !_isStreaming) {
+        _startWebRTC();
+      }
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      // Close connection when app is backgrounded to save resources and avoid stale sockets
+      if (_isStreaming) {
+        _peerConnection?.close();
+        _peerConnection = null;
+        _remoteRenderer.srcObject = null;
+        setState(() => _isStreaming = false);
+      }
+    }
+  }
+
+  @override
   void dispose() {
+    _exitFullScreen();
     _stopStream();
     _remoteRenderer.dispose();
-    _hostController.dispose();
-    _portController.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
-  Future<void> _stopStream() async {
+  void _toggleFullScreen() {
+    setState(() {
+      _isFullScreen = !_isFullScreen;
+    });
+
+    if (_isFullScreen) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    } else {
+      _exitFullScreen();
+    }
+  }
+
+  void _exitFullScreen() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+    ]);
+  }
+
+  Future<void> _stopStream({bool resetIntent = true}) async {
+    if (resetIntent) {
+      _shouldBeStreaming = false;
+    }
+
     await _peerConnection?.close();
     _peerConnection = null;
+    _remoteRenderer.srcObject = null;
     if (mounted) {
       setState(() => _isStreaming = false);
     }
@@ -49,34 +97,49 @@ class _VideoFeedPageState extends State<VideoFeedPage> {
 
   Future<void> _startWebRTC() async {
     try {
+      // Clean up any existing connection before starting a new one
+      await _stopStream(resetIntent: false);
+
       setState(() {
         _errorMessage = null;
         _isStreaming = true;
+        _shouldBeStreaming = true;
       });
 
       final Map<String, dynamic> configuration = {
-        'iceServers': []
+        'iceServers': [],
+        'sdpSemantics': 'unified-plan',
       };
 
       _peerConnection = await createPeerConnection(configuration);
 
       // Listen for the remote stream
       _peerConnection!.onTrack = (RTCTrackEvent event) {
-        if (event.track.kind == 'video') {
-          _remoteRenderer.srcObject = event.streams[0];
+        if (event.track.kind == 'video' && event.streams.isNotEmpty) {
+          setState(() {
+            _remoteRenderer.srcObject = event.streams[0];
+          });
         }
       };
 
-      // Create offer to receive video only
-      RTCSessionDescription offer = await _peerConnection!.createOffer({
-        'offerToReceiveVideo': 1,
-        'offerToReceiveAudio': 0,
-      });
+      // Use transceivers for Unified Plan (modern WebRTC)
+      // This explicitly tells the peer connection we want to receive video
+      await _peerConnection!.addTransceiver(
+        kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
+        init: RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
+      );
+
+      // Create offer without legacy constraints
+      RTCSessionDescription offer = await _peerConnection!.createOffer();
       await _peerConnection!.setLocalDescription(offer);
+
+      // Dynamically use host from MqttService
+      final String host = MqttService.instance.host;
+      final String port = '8080'; // Default bridge port
 
       // Signaling: POST offer to your Python WebRTC server
       final response = await http.post(
-        Uri.parse('http://${_hostController.text}:${_portController.text}/offer'),
+        Uri.parse('http://$host:$port/offer'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'sdp': offer.sdp,
@@ -102,67 +165,114 @@ class _VideoFeedPageState extends State<VideoFeedPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('WebRTC Video Stream')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
+    final videoPlayer = Container(
+      margin: _isFullScreen ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: _isFullScreen ? BorderRadius.zero : BorderRadius.circular(16),
+        border: _isFullScreen ? null : Border.all(color: Colors.white10),
+      ),
+      child: ClipRRect(
+        borderRadius: _isFullScreen ? BorderRadius.zero : BorderRadius.circular(16),
+        child: Stack(
+          alignment: Alignment.center,
           children: [
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  children: [
-                    TextField(controller: _hostController, decoration: const InputDecoration(labelText: 'Server Host')),
-                    TextField(controller: _portController, decoration: const InputDecoration(labelText: 'Server Port')),
-                    const SizedBox(height: 10),
-                    ElevatedButton(
-                      onPressed: _isStreaming ? _stopStream : _startWebRTC,
-                      style: ElevatedButton.styleFrom(backgroundColor: _isStreaming ? Colors.red : null),
-                      child: Text(_isStreaming ? 'Stop Stream' : 'Start Stream'),
-                    ),
-                  ],
+            // The Video View
+            if (_remoteRenderer.srcObject != null)
+              RTCVideoView(
+                _remoteRenderer,
+                objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+              ),
+
+            // Dark overlay when not streaming
+            if (!_isStreaming || _remoteRenderer.srcObject == null)
+              Container(color: Colors.black45),
+
+            // Player Controls Overlay
+            if (!_isStreaming)
+              IconButton(
+                icon: const Icon(Icons.play_circle_fill, size: 80, color: Colors.white70),
+                onPressed: _startWebRTC,
+              )
+            else if (_remoteRenderer.srcObject == null && _errorMessage == null)
+              const CircularProgressIndicator(color: Colors.white),
+
+            // Live Badge Overlay
+            if (_isStreaming && _remoteRenderer.srcObject != null)
+              Positioned(
+                top: 16,
+                left: 16,
+                child: _buildLiveBadge(),
+              ),
+
+            // Full Screen Toggle Button Overlay
+            if (_isStreaming && _remoteRenderer.srcObject != null)
+              Positioned(
+                bottom: 16,
+                right: 16,
+                child: IconButton(
+                  icon: Icon(
+                    _isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                    size: 42,
+                    color: Colors.white54,
+                  ),
+                  onPressed: _toggleFullScreen,
                 ),
               ),
-            ),
-            const SizedBox(height: 20),
-            Container(
-              width: double.infinity,
-              height: 300,
-              decoration: BoxDecoration(
-                color: Colors.black87,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: _errorMessage != null
-                  ? Center(child: Text(_errorMessage!, style: const TextStyle(color: Colors.white)))
-                  : _isStreaming
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: RTCVideoView(_remoteRenderer, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain),
-                        )
-                      : const Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(Icons.videocam_off, color: Colors.white54, size: 48),
-                              SizedBox(height: 8),
-                              Text('Stream Offline', style: TextStyle(color: Colors.white54)),
-                            ],
-                          ),
-                        ),
-            ),
-            const SizedBox(height: 10),
-            if (_isStreaming)
-              const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 10),
-                  Text('Receiving frames...', style: TextStyle(fontStyle: FontStyle.italic)),
-                ],
+
+            // Error Display
+            if (_errorMessage != null)
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Text(
+                  _errorMessage!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+                ),
               ),
           ],
         ),
+      ),
+    );
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: _isFullScreen
+          ? null
+          : AppBar(
+              title: const Text('Drone Live Feed'),
+              backgroundColor: Colors.black,
+              foregroundColor: Colors.white,
+              elevation: 0,
+            ),
+      body: Center(
+        child: _isFullScreen
+            ? videoPlayer
+            : AspectRatio(
+                aspectRatio: 16 / 9,
+                child: videoPlayer,
+              ),
+      ),
+    );
+  }
+
+  Widget _buildLiveBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.red.withOpacity(0.8),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.circle, color: Colors.white, size: 10),
+          const SizedBox(width: 6),
+          const Text(
+            "LIVE",
+            style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+        ],
       ),
     );
   }
