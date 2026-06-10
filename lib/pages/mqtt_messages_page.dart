@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../services/mqtt_service.dart';
 import 'video_feed_page.dart';
+import 'metrics_page.dart';
 
 class MqttMessagesPage extends StatefulWidget {
   const MqttMessagesPage({super.key});
@@ -75,6 +76,7 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
     MqttService.instance.subscribe("/notification/med_alert");
     MqttService.instance.subscribe("/notification/violation_alert");
     MqttService.instance.subscribe("/notification/alert_notification");
+    MqttService.instance.subscribe("/companion_drone/telemetry/os_metrics");
     return Scaffold(
       appBar: AppBar(
         title: const Text('MQTT Messages'),
@@ -139,20 +141,23 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.all(8.0),
-            child: Row(
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                Expanded(
+                SizedBox(
+                  width: (MediaQuery.of(context).size.width - 24) / 2,
                   child: ElevatedButton(
                     style: ButtonStyle(
                       backgroundColor: WidgetStateProperty.all(Colors.red),
                       foregroundColor: WidgetStateProperty.all(Colors.white),
                     ),
                     onPressed: _publish,
-                    child: const Text('Send Medical Alert'),
+                    child: const Text('Medical Alert'),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
+                SizedBox(
+                  width: (MediaQuery.of(context).size.width - 24) / 2,
                   child: ElevatedButton.icon(
                     style: ButtonStyle(
                       backgroundColor: WidgetStateProperty.all(Colors.blue),
@@ -167,7 +172,26 @@ class _MqttMessagesPageState extends State<MqttMessagesPage> {
                       );
                     },
                     icon: const Icon(Icons.videocam),
-                    label: const Text('Video Stream'),
+                    label: const Text('Video'),
+                  ),
+                ),
+                SizedBox(
+                  width: MediaQuery.of(context).size.width - 16,
+                  child: ElevatedButton.icon(
+                    style: ButtonStyle(
+                      backgroundColor: WidgetStateProperty.all(Colors.orange),
+                      foregroundColor: WidgetStateProperty.all(Colors.white),
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const MetricsPage(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.bar_chart),
+                    label: const Text('Companion Computer Metrics'),
                   ),
                 ),
               ],
