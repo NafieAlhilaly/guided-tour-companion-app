@@ -18,8 +18,12 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
   RTCPeerConnection? _peerConnection;
   bool _isStreaming = false;
   bool _shouldBeStreaming = false; // Track if the user explicitly started the stream
+  RTCDataChannel? _dataChannel;
+  double? _currentLatencyMs;
   bool _isFullScreen = false;
+  bool _showDebugLogs = false;
   String? _errorMessage;
+  final List<String> _debugLogs = [];
 
   @override
   void initState() {
@@ -30,6 +34,15 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
 
   Future<void> _initRenderer() async {
     await _remoteRenderer.initialize();
+  }
+
+  void _log(String message) {
+    final timestamp = DateTime.now().toIso8601String().split('T').last.substring(0, 8);
+    setState(() {
+      _debugLogs.insert(0, '[$timestamp] $message');
+      if (_debugLogs.length > 50) _debugLogs.removeLast();
+    });
+    print(message);
   }
 
   @override
@@ -54,6 +67,8 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
   void dispose() {
     _exitFullScreen();
     _stopStream();
+    _dataChannel?.close();
+    _dataChannel = null;
     _remoteRenderer.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -89,6 +104,8 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
 
     await _peerConnection?.close();
     _peerConnection = null;
+    _dataChannel?.close(); // Close data channel when stream stops
+    _dataChannel = null;
     _remoteRenderer.srcObject = null;
     if (mounted) {
       setState(() => _isStreaming = false);
@@ -107,37 +124,56 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
       });
 
       final Map<String, dynamic> configuration = {
-        'iceServers': [],
+        'iceServers': [
+          {'urls': 'stun:stun.l.google.com:19302'}, // Added STUN for better discovery
+        ],
         'sdpSemantics': 'unified-plan',
       };
 
+      _log("Creating PeerConnection...");
       _peerConnection = await createPeerConnection(configuration);
 
-      // Listen for the remote stream
+      _peerConnection!.onIceGatheringState = (state) {
+        _log("ICE Gathering State: ${state.toString().split('.').last}");
+      };
+
+      _peerConnection!.onIceConnectionState = (state) {
+        _log("ICE Connection State: ${state.toString().split('.').last}");
+      };
+
       _peerConnection!.onTrack = (RTCTrackEvent event) {
         if (event.track.kind == 'video' && event.streams.isNotEmpty) {
           setState(() {
             _remoteRenderer.srcObject = event.streams[0];
           });
+          _log("SUCCESS: Remote video track received");
         }
       };
 
-      // Use transceivers for Unified Plan (modern WebRTC)
-      // This explicitly tells the peer connection we want to receive video
+      _peerConnection!.onDataChannel = _handleDataChannel;
+
+      // IMPORTANT: Create a data channel before generating the offer.
+      // This ensures the SDP offer includes the 'm=application' section for SCTP.
+      // Without this, the server cannot initiate the 'latency-tracer' channel.
+      await _peerConnection!.createDataChannel('capability-check', RTCDataChannelInit());
+
+      _log("Adding Video Transceiver...");
       await _peerConnection!.addTransceiver(
         kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
         init: RTCRtpTransceiverInit(direction: TransceiverDirection.RecvOnly),
       );
 
-      // Create offer without legacy constraints
+      _log("Creating Offer...");
       RTCSessionDescription offer = await _peerConnection!.createOffer();
+      
+      _log("Setting Local Description...");
       await _peerConnection!.setLocalDescription(offer);
 
       // Dynamically use host from MqttService
       final String host = MqttService.instance.host;
       final String port = '8080'; // Default bridge port
 
-      // Signaling: POST offer to your Python WebRTC server
+      _log("POSTing offer to http://$host:$port/offer");
       final response = await http.post(
         Uri.parse('http://$host:$port/offer'),
         headers: {'Content-Type': 'application/json'},
@@ -149,17 +185,66 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        _log("Answer received, setting remote description...");
         await _peerConnection!.setRemoteDescription(
           RTCSessionDescription(data['sdp'], data['type']),
         );
+        _log("Handshake complete. Waiting for stream/data...");
       } else {
-        throw Exception('Server returned ${response.statusCode}');
+        throw Exception('Server Error: ${response.statusCode} - ${response.body}');
       }
     } catch (e) {
+      _log("FATAL ERROR: $e");
       setState(() {
         _errorMessage = "WebRTC Error: $e";
         _isStreaming = false;
       });
+    }
+  }
+
+  void _handleDataChannel(RTCDataChannel channel) {
+    _log('!!! Data Channel Callback Triggered: ${channel.label}'); // Crucial new log
+    _log('Received remote data channel: ${channel.label}');
+    if (channel.label == 'latency-tracer') {
+      setState(() {
+        _dataChannel = channel;
+      });
+
+      _dataChannel!.onMessage = (RTCDataChannelMessage message) {
+        if (!message.isBinary) {
+          _processLatencyMessage(message.text);
+        }
+      };
+
+      _dataChannel!.onDataChannelState = (state) {
+        _log('Latency Data Channel State: $state');
+        if (mounted) setState(() {}); // Refresh UI on state change
+        
+        if (state == RTCDataChannelState.RTCDataChannelClosed || state == RTCDataChannelState.RTCDataChannelClosing) {
+          setState(() {
+            _currentLatencyMs = null; // Clear latency when channel closes
+          });
+        }
+      };
+    }
+  }
+
+  void _processLatencyMessage(String messageText) {
+    try {
+      final Map<String, dynamic> data = jsonDecode(messageText);
+      final dynamic ts = data['ts'];
+      if (ts == null || ts is! num) {
+        _log('Latency message error: missing "ts" key');
+        return;
+      }
+      final int sourceTsNs = ts.toInt(); 
+      final int nowNs = DateTime.now().microsecondsSinceEpoch * 1000; // Current device time in nanoseconds
+      final double totalLatencyMs = (nowNs - sourceTsNs) / 1000000.0; // Convert ns to ms
+      setState(() {
+        _currentLatencyMs = totalLatencyMs;
+      });
+    } catch (e) {
+      _log('Error processing latency: $e');
     }
   }
 
@@ -197,12 +282,18 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
             else if (_remoteRenderer.srcObject == null && _errorMessage == null)
               const CircularProgressIndicator(color: Colors.white),
 
-            // Live Badge Overlay
+            // Live Badge Overlay (Initial Position)
             if (_isStreaming && _remoteRenderer.srcObject != null)
               Positioned(
                 top: 16,
                 left: 16,
                 child: _buildLiveBadge(),
+              ),
+              if (_isStreaming && _remoteRenderer.srcObject != null)
+              Positioned(
+                top: 16,
+                right: 16,
+                child: _buildLatencyBadge(),
               ),
 
             // Full Screen Toggle Button Overlay
@@ -248,15 +339,24 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
       body: Center(
         child: _isFullScreen
             ? videoPlayer
-            : AspectRatio(
-                aspectRatio: 16 / 9,
-                child: videoPlayer,
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: videoPlayer,
+                  ),
+                  const SizedBox(height: 16),
+                  const SizedBox(height: 16),
+                  _showDebugLogs ? Expanded(child: _buildDebugPanel()) : _buildDebugPanel(),
+                ],
               ),
       ),
     );
   }
 
   Widget _buildLiveBadge() {
+    if (!_isStreaming || _remoteRenderer.srcObject == null) return const SizedBox.shrink();
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
@@ -272,6 +372,99 @@ class _VideoFeedPageState extends State<VideoFeedPage> with WidgetsBindingObserv
             "LIVE",
             style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLatencyBadge() {
+    if (!_isStreaming) return const SizedBox.shrink();
+
+    String latencyText = "--- ms";
+    Color badgeColor = Colors.blue;
+
+    if (_currentLatencyMs != null) {
+      latencyText = "${_currentLatencyMs!.toStringAsFixed(1)} ms";
+    } else if (_dataChannel == null) {
+      latencyText = (_peerConnection != null && _peerConnection!.iceConnectionState == RTCIceConnectionState.RTCIceConnectionStateConnected)
+          ? "Server not creating Data Channel?"
+          : "Waiting for Data Channel...";
+    } else if (_dataChannel!.state != RTCDataChannelState.RTCDataChannelOpen) {
+      latencyText = "Channel: ${_dataChannel!.state.toString().split('.').last}";
+      badgeColor = Colors.orange;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: badgeColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.speed, color: Colors.white, size: 10),
+          const SizedBox(width: 6),
+          Text(
+            latencyText,
+            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDebugPanel() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              GestureDetector(
+                onTap: () => setState(() => _showDebugLogs = !_showDebugLogs),
+                behavior: HitTestBehavior.opaque,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _showDebugLogs ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up,
+                      color: Colors.white70,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 8),
+                    const Text("Debug Logs", style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: () => setState(() => _debugLogs.clear()),
+                child: const Icon(Icons.delete_outline, color: Colors.white38, size: 18),
+              ),
+            ],
+          ),
+          if (_showDebugLogs) ...[
+            const Divider(color: Colors.white10),
+            Expanded(
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: _debugLogs.length,
+                itemBuilder: (context, index) => Text(
+                  _debugLogs[index],
+                  style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontFamily: 'monospace'),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
